@@ -1,23 +1,26 @@
-def get_request_args(request, *args, **kwargs):
+from functools import reduce
+
+
+def hostname():
     """
-    Return a dictionary of arguments from request data.
-
-    The name of the desired arguments must be passed as positional arguments.
-    Keyword arguments provide argument names with their respective default
-    values.
+    Return the hostname of currently running instance.
     """
 
-    data = request.data
-    result = {}
+    return 'http://localhost:8000'
 
-    if request.content_type in ('application/json', 'x-www-form-urlencoded'):
-        for arg in args:
-            try:
-                result[arg] = data[arg]
-            except KeyError:
-                raise ValueError('%r key not found in data' % arg)
-        for arg, default in kwargs.items():
-            result[arg] = data.get(arg)
-    else:
-        raise ValueError('unssuported data: %s' % request.content_type)
-    return result
+
+def full_url(url, *args):
+    """
+    Prepend url with the current hostname.
+    """
+
+    def join_path(x, y):
+        if x.endswith('/') and y.startswith('/'):
+            return x[:-1] + y
+        elif x.endswith('/') or y.startswith('/'):
+            return x + y
+        else:
+            return '%s/%s' % (x, y)
+
+    path = (hostname(), url) + args
+    return reduce(join_path, path)

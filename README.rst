@@ -9,7 +9,7 @@
     :target: https://coveralls.io/github/*github_repository*?branch=master
 
 
-You are seeing this description because the package owner is lazy and did not
-provide a detailed description for its project ;-)
+This project project is a REST based ejudge sever used by Codeschool_ main
+application. It isolates code execution in a sandbox.
 
-Since you are here, please help with the ejudge-server's documentation!
+.. _Codeschool: https://github.com/cslms/cs-server

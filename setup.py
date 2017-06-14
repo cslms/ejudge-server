@@ -1,13 +1,6 @@
-# -*- coding: utf-8 -*-
-#
-# This file were created by Python Boilerplate. Use boilerplate to start simple
-# usable and best-practices compliant Python projects.
-#
-# Learn more about it at: http://github.com/fabiommendes/python-boilerplate/
-#
-
-import os
 import codecs
+import os
+
 from setuptools import setup, find_packages
 
 # Save version and author to __meta__.py
@@ -57,14 +50,19 @@ setup(
         'redis',
 
         # Django deps
+        'django-jsonfield',
         'django==1.10',
         'djangorestframework',
         'django-celery-results',
         'django-celery-beat',
+        'fake-factory==0.7.4',
     ],
     extras_require={
         'dev': [
             'python-boilerplate[dev]',
+            'pytest-django',
+            'pytest-cov',
+            'manuel',
         ],
     },
 

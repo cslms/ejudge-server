@@ -1,10 +1,9 @@
-import os
-
-import pytest
-import manuel.ignore
 import manuel.codeblock
 import manuel.doctest
+import manuel.ignore
 import manuel.testing
+import os
+import pytest
 
 
 def make_manuel_suite(ns):
@@ -13,12 +12,6 @@ def make_manuel_suite(ns):
 
     Test functions are injected in the given namespace.
     """
-
-    # Wrap function so pytest does not expect an spurious "self" fixture.
-    def _wrapped(func, name):
-        wrapped = lambda: func()
-        wrapped.__name__ = name
-        return wrapped
 
     # Collect documentation files
     cd = os.path.dirname
@@ -41,7 +34,12 @@ def make_manuel_suite(ns):
         ns[name] = pytest.mark.documentation(_wrapped(test.runTest, name))
     return suite
 
-try:
-    make_manuel_suite(globals())
-except OSError:
-    print('Documentation files not found: disabling tests!')
+
+# Wrap function so pytest does not expect an spurious "self" fixture.
+def _wrapped(func, name):
+    wrapped = lambda: func()
+    wrapped.__name__ = name
+    return wrapped
+
+
+make_manuel_suite(globals())

@@ -4,19 +4,25 @@ from celery.utils.log import get_task_logger
 logger = get_task_logger(__name__)
 
 
-# Mokey patch ejudge.execution_manager to use billiard.Process instead of
-# multiprocessing.Process
-import billiard
-from ejudge import execution_manager as _ex
-_ex.multiprocessing = billiard
+@shared_task
+def expand_question_iospec(question_pk):
+    """
+    Expand question's the IoSpec from template using the given model.
+
+    After expansion is complete, sets the .is_valid attribute to True.
+    """
+    from ejudge_server.question_io.models import IoQuestion
+
+    question = IoQuestion.objects.get(pk=question_pk)
+    question.expand_inplace()
 
 
 @shared_task
-def grade_code(job_pk):
-    from .models import GradingJob
+def autograde_submission(submission_pk):
+    """
+    Grade submission.
+    """
+    from ejudge_server.question_io.models import IoSubmission
 
-    job = GradingJob.objects.get(pk=job_pk)
-    job.running = True
-    job.save(update_fields=['running'])
-    result = job.run()
-    return result.to_json()
+    submission = IoSubmission.objects.get(pk=submission_pk)
+    submission.feedback_auto()

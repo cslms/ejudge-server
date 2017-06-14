@@ -24,13 +24,9 @@ engines:
     enabled: true
 ratings:
   paths:
-  - "src/codeschool/**.py"
+  - "src/ejudge_server/**.py"
 exclude_paths:
-  - "src/codeschool/**/migrations/"
+  - "src/ejudge_server/**/migrations/"
   - "__init__.py"
-  - "node_modules/**/*"
-  - "static/**/*"
   - "docker/**/*"
-  - "collect/**/*"
   - "docs/**/*"
-  - "elm-stuff"

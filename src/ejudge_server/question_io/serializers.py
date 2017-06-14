@@ -1,24 +1,60 @@
 from rest_framework import serializers
 
-from .models import Question, Grader, GradingJob
+from ejudge_server.utils import full_url
+from .models import IoQuestion, IoSubmission
 
 
-class QuestionSerializer(serializers.ModelSerializer):
+class IoQuestionSerializer(serializers.HyperlinkedModelSerializer):
+    """
+    Serialize IoQuestion models.
+    """
+
+    resources = serializers.SerializerMethodField()
+
     class Meta:
-        model = Question
-        fields = '__all__'
+        model = IoQuestion
+        fields = ('url', 'title', 'language', 'iospec_template', 'iospec',
+                  'source', 'num_expansions', 'resources', 'uuid')
+
+    def get_resources(self, obj):
+        base_url = full_url('api/io/questions/%s/' % obj.uuid)
+        return {
+            'iospec': base_url + 'iospec/'
+        }
 
 
-class GraderSerializer(serializers.ModelSerializer):
+class IoQuestionExpansionSerializer(serializers.Serializer):
+    """
+    Serializer for the /io/questions/{id}/iospec/ endpoint.
+    """
+
+    num_expansions = serializers.IntegerField()
+
+
+class IoSubmissionSerializer(serializers.HyperlinkedModelSerializer):
+    """
+    Serializer for IoSubmission objects.
+    """
+
+    resources = serializers.SerializerMethodField()
+    grade = serializers.SerializerMethodField()
+
     class Meta:
-        model = Grader
-        fields = '__all__'
+        model = IoSubmission
+        fields = ('url', 'question', 'source', 'language', 'grade',
+                  'resources', 'uuid')
+
+    def get_resources(self, obj):
+        base_url = full_url('api/io/submissions/%s/' % obj.uuid)
+        return {
+            'feedback': base_url + 'feedback/'
+        }
+
+    def get_grade(self, obj):
+        return obj.feedback.grade if obj.has_feedback else None
 
 
-class GradingJobSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = GradingJob
-        fields = '__all__'
-
-    created = serializers.DateTimeField(read_only=True)
-    finished = serializers.DateTimeField(read_only=True)
+class IoSubmissionFeedbackSerializer(serializers.Serializer):
+    """
+    Serializer for the /io/submissions/{id}/feedback/ endpoint.
+    """

@@ -1,208 +1,193 @@
-import json
-
+import jsonfield
+import logging
+import uuid
+from django.core import validators
 from django.db import models
-from django.utils.datetime_safe import datetime
 
-import ejudge
-import iospec
+from .tasks import expand_question_iospec, autograde_submission
+from .utils import iospec_expand, grade_submission
 
+logger = logging.getLogger('question_io')
 
-class HasIoSpecBase(models.Model):
-    """
-    Common functionality managing iospec data for both question and grader
-    models.
-    """
-
-    class Meta:
-        abstract = True
-
-    iospec_pre = models.TextField(blank=True)
-    iospec_post = models.TextField(blank=True)
-    num_expansions = models.IntegerField(default=20)
-
-    def get_tests(self, post_grade=False):
-        """
-        Return a parsed Iospec instance for the current tests.
-
-        If post_grade=True, return tests for the post-grade evaluation phase.
-        """
-        return self.get_post_tests() if post_grade else self.get_pre_tests()
-
-    def get_pre_tests(self):
-        """
-        Return an Iospec instance with all pre-tests.
-        """
-
-        spec = iospec.parse(self.iospec_pre)
-        spec.expand_inputs(size=20)
-        return spec
-
-    def get_post_tests(self):
-        """
-        Return an Iospec instance with all post-tests.
-        """
-
-        if self.iospec_post:
-            spec = iospec.parse(self.iospec_pre + '\n\n' + self.iospec_post)
-        spec = iospec.parse(self.iospec_pre)
-        spec.expand_inputs(size=20)
-        return spec
+LANGUAGE_CHOICES = [
+    ('python', 'Python 3.x'),
+    ('python2', 'Python 2.7'),
+    ('gcc', 'C (gcc 6.3 --std=c99)'),
+]
 
 
-class Question(HasIoSpecBase):
+class IoQuestion(models.Model):
     """
     Represents a IO based question in the database.
     """
 
-    name = models.CharField(max_length=100)
-    question_id = models.IntegerField()
-    source = models.TextField(blank=True)
-    language = models.CharField(blank=True, max_length=50)
+    title = models.CharField(
+        max_length=100,
+        help_text=(
+            'IoQuestion\'s name'
+        )
+    )
+    uuid = models.UUIDField(
+        default=uuid.uuid4,
+        primary_key=True,
+        help_text=(
+            'Universal Unique Identifier.'
+        )
+    )
+    source = models.TextField(
+        help_text=(
+            'Source code for the reference solution used to expand the '
+            'iospec template.'
+        )
+    )
+    language = models.CharField(
+        max_length=50,
+        choices=LANGUAGE_CHOICES,
+        help_text=(
+            'Programming language used in the reference program.'
+        )
+    )
+    iospec = models.TextField(
+        blank=True,
+        editable=False,
+        help_text=(
+            'Expanded iospec data. Use the ./iospec-expansion/ endpoint in '
+            'order to force/control expansion'
+        )
+    )
+
+    iospec_template = models.TextField(
+        help_text=(
+            'Correction template written in the iospec format.'
+        )
+    )
+    num_expansions = models.IntegerField(
+        default=25,
+        help_text=(
+            'Default number of expansions computed from the iospec template.'
+        )
+    )
+    is_valid = models.BooleanField(default=bool)
 
     def __str__(self):
-        return '%s (%s)' % (self.name, self.language)
+        return '%s (%s)' % (self.title, self.uuid)
 
     def __repr__(self):
-        return '<Question %r (%s)>' % (self.name, self.language)
+        return '<IoQuestion %r (%s)>' % (self.title, self.uuid)
 
-    def new_grader(self, num_expansions):
+    _iospec_expand = staticmethod(iospec_expand)
+
+    def save(self, schedule=True, **kwargs):
+        super().save(**kwargs)
+        if schedule and not self.iospec:
+            expand_question_iospec.delay(self.pk)
+
+    def expand_inplace(self, commit=True):
         """
-        Return a new grader for the question.
+        Expands iospec template inplace saving results on the database.
         """
 
-        language = self.language
-        pre_tests = self.get_pre_tests()
-        post_tests = self.get_post_tests()
-        source = self.source
-        pre_tests_expansion = ejudge.run(source, pre_tests, lang=language)
-        post_tests_expansion = ejudge.run(source, post_tests, lang=language)
-
-        return Grader.objects.create(
-            question=self,
-            iospec_pre=pre_tests_expansion.source(),
-            iospec_post=post_tests_expansion.source(),
+        logger.info('expanding question: %s' % self)
+        from pprint import pprint
+        pprint(self.__dict__)
+        self.iospec = self._iospec_expand(
+            self.iospec_template,
+            self.source,
+            self.language
         )
-
-    def get_last_grader(self):
-        """
-        Return the current and most update grader instance.
-        """
-
-        return self.graders.last()
+        self.is_valid = True
+        pprint(self.__dict__)
+        if commit:
+            super().save()
 
 
-class Grader(HasIoSpecBase):
+class IoSubmission(models.Model):
     """
-    A grader object with expanded
+    An anonymous submission.
+
+    The Codeschool main application should take care of assinging submissions
+    to users. The only responsibility of the ejudge-server is to register
+    questions and grade submissions.
     """
 
-    class Meta:
-        ordering = ['created']
-
-    question = models.ForeignKey(Question, related_name='graders')
-    created = models.DateTimeField(auto_created=True)
-    usable = models.BooleanField(default=bool)
-
-    @property
-    def index(self):
-        qs = (
-            self.question.graders \
-                .filter(created__lt=self.created)
+    uuid = models.UUIDField(
+        default=uuid.uuid4,
+        primary_key=True
+    )
+    question = models.ForeignKey(
+        IoQuestion,
+        related_name='submissions',
+    )
+    source = models.TextField(
+        help_text=(
+            'Source code for submission.'
         )
-        return qs.count()
+    )
+    language = models.CharField(
+        max_length=50,
+        choices=LANGUAGE_CHOICES,
+        help_text=(
+            'Programming language used in the submitted program.'
+        )
+    )
+    has_feedback = models.BooleanField(
+        editable=False,
+        default=bool,
+    )
 
     def __str__(self):
-        return '%s (%s-%s)' % (
-        self.question.name, self.question.language, self.index)
+        return '%s (%s/%s)' % (self.uuid, self.question.title, self.language)
 
     def __repr__(self):
-        return '<Grader %r (%s-%s)>' % (
-        self.question.name, self.question.language, self.index)
+        return '<IoSubmission %s (%s/%s)>' % (
+            self.uuid, self.question.title, self.language
+        )
 
-    def grade(self, source, language, post_grade=False):
+    # It is here to helo mocking
+    _grade_submission = staticmethod(grade_submission)
+
+    def save(self, schedule=True, **kwargs):
+        super().save(**kwargs)
+        if schedule and not self.has_feedback:
+            autograde_submission.delay(self.pk)
+
+    def feedback_auto(self, commit=True):
         """
-        Return a Feedback object for the given source.
-
-        Args:
-            source (str): Source code to be graded.
-            language (str): Programming language of input source code.
-            post_grade (bool): If True, uses the post-grading tests.
-        """
-
-        spec = self.get_tests(post_grade=False)
-        return ejudge.grade(source, spec, lang=language)
-
-    def grade_delayed(self, source, language, post_grade=False):
-        job = GradingJob.objects.create(grader=self,
-                                        source=source,
-                                        language=language,
-                                        post_grade=bool(post_grade))
-        job.run_background()
-        return job
-
-
-class GradingJob(models.Model):
-    """
-    Represents a ongoing grading job.
-    """
-
-    created = models.DateTimeField(auto_created=True, auto_now=True)
-    finished = models.DateTimeField(blank=True, null=True)
-    grader = models.ForeignKey(Grader)
-    source = models.TextField()
-    language = models.CharField(max_length=20)
-    post_grade = models.BooleanField()
-    concluded = models.BooleanField(default=bool)
-    running = models.BooleanField(default=bool)
-    result_data = models.TextField(default='{}')
-
-    @property
-    def result(self):
-        try:
-            return self._result
-        except AttributeError:
-            self._result = json.loads(self.result_data)
-            return self._result
-
-    @result.setter
-    def result(self, value):
-        self.result_data = json.dumps(value)
-        self._result = value
-
-    def __str__(self):
-        return 'Job: %s' % self.grader
-
-    def run(self):
-        """
-        Grade current submission and fill the 'result' field
+        Grade submission and return a IoFeedback instance.
         """
 
-        # Mark as running task
-        self.running = False
-        self.save(update_fields=['running'])
+        logger.info('grading submission: %s (%s)' % (self, self.question))
 
-        # Run task and save results
-        try:
-            feedback = self.grader.grade(self.source, self.language,
-                                         self.post_grade)
-            feedback.pprint()
-            self.result = feedback.to_json()
-            self.finished = datetime.now()
-            self.concluded = True
-        finally:
-            self.running = False
-            self.save()
+        grade, feedback_data = self._grade_submission(
+            self.question.iospec_template,
+            self.source,
+            self.language
+        )
+        feedback = IoFeedback(
+            grade=grade, submission=self, feedback_data=feedback_data
+        )
+        self.has_feedback = True
+
+        if commit:
+            feedback.save()
+            self.save(update_fields=['has_feedback'])
         return feedback
 
-    def run_background(self):
-        """
-        Run grading task in background.
-        """
 
-        if self.pk is None:
-            self.save()
+class IoFeedback(models.Model):
+    """
+    IoFeedback for submission.
+    """
 
-        if not self.finished and not self.running:
-            from .tasks import grade_code
-
-            grade_code.delay(self.pk)
+    submission = models.OneToOneField(
+        IoSubmission,
+        related_name='feedback',
+        primary_key=True,
+    )
+    grade = models.DecimalField(
+        max_digits=5, decimal_places=2,
+        validators=[
+            validators.MinValueValidator(0),
+            validators.MaxValueValidator(100),
+        ])
+    feedback_data = jsonfield.JSONField()

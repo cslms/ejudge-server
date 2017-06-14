@@ -1,119 +1,130 @@
-from django.shortcuts import get_object_or_404
-from rest_framework import permissions
 from rest_framework import viewsets
-from rest_framework.decorators import detail_route, list_route
 from rest_framework.response import Response
+from rest_framework.routers import APIRootView
 
-from ..utils import get_request_args
-from .models import Question, Grader, GradingJob
-from .serializers import QuestionSerializer, GraderSerializer, GradingJobSerializer
+from .models import IoQuestion, IoSubmission
+from .serializers import \
+    IoQuestionSerializer, IoSubmissionSerializer, IoQuestionExpansionSerializer, \
+    IoSubmissionFeedbackSerializer
 
 
-class QuestionViewSet(viewsets.ModelViewSet):
+# ------------------------------------------------------------------------------
+# Questions
+#
+class QuestionIoViewSet(viewsets.ModelViewSet):
     """
-    View set for Question models.
-    """
+    A programming question based on matching IO with a template.
 
-    queryset = Question.objects.all()
-    serializer_class = QuestionSerializer
-    permission_classes = (permissions.IsAuthenticated,)
+    Performs a CRUD with default REST actions.
 
-    @detail_route(['POST'])
-    def new_grader(self, request, pk=None, *args, **kwargs):
-        """
-        Create grader for question.
-        """
-
-        question = self.get_object()
-        num_expansions = request.POST.get('num_expansions', 20)
-        grader = question.new_grader(num_expansions=num_expansions)
-        request.method = 'GET'
-        return view_grader(request, pk=grader.pk)
-
-    @detail_route(['GET'])
-    def current_grader(self, request, pk=None, *args, **kwargs):
-        """
-        Create grader for question.
-        """
-
-        question = self.get_object()
-        grader = question.get_last_grader()
-        return view_grader(request, pk=grader.pk)
-
-    @detail_route(['GET'])
-    def graders(self, request, pk=None, *args, **kwargs):
-        """
-        Create grader for question.
-        """
-
-        qs = Grader.objects.filter(question_id=pk)
-        view = GraderViewSet.as_view({'get': 'list'}, queryset=qs)
-        return view(request)
-
-
-class GraderViewSet(viewsets.ModelViewSet):
-    """
-    View set for Grader models.
+    The /api/io/questions/{id}/iospec/ resource represents the set of examples
+    used to grade submissions to the current question.
     """
 
-    queryset = Grader.objects.all()
-    serializer_class = GraderSerializer
-
-    @detail_route(['POST'])
-    def grade_response(self, request, pk, source=None):
-        """
-        Grade response using given grader.
-        """
-
-        grader = get_object_or_404(Grader, pk=pk)
-
-        source = request.POST.get('source', None)
-        language = request.POST.get('language', None)
-        post_grade = request.POST.get('post_grade', False)
-
-        feedback = grader.grade(source, language, post_grade=post_grade)
-        return Response(feedback.to_json())
-
-    @detail_route(['POST'])
-    def grade(self, request, pk=None, format=None):
-        """
-        Create a new grader
-        """
-
-        grader = self.get_object()
-        kwargs = get_request_args(request, 'source', 'language', post_grade=True)
-        source, language, post_grade = kwargs['source'], kwargs['language'], kwargs['post_grade']
-        job = grader.grade_delayed(source, language, post_grade)
-        job_serialized = GradingJobSerializer(job)
-        return Response(job_serialized.data)
-
-    def get_renderer_context(self):
-        ctx = super().get_renderer_context()
-        print(ctx)
-        return ctx
-
-view_grader = GraderViewSet.as_view({'get': 'retrieve'})
+    queryset = IoQuestion.objects.all()
+    serializer_class = IoQuestionSerializer
 
 
-class GradingJobViewSet(viewsets.ModelViewSet):
+class QuestionExpansionViewSet(viewsets.ModelViewSet):
     """
-    View set for grading jobs.
+    GET - return the status of the iospec expansion
+    PUT - forces iospec expansion to happen
     """
 
-    queryset = GradingJob.objects.all()
-    serializer_class = GradingJobSerializer
+    queryset = IoQuestion.objects.all()
+    serializer_class = IoQuestionExpansionSerializer
 
-    @list_route()
-    def pending(self, request, *args, **kwargs):
-        queryset = self.queryset.filter(concluded=False)
-        serializer = self.serializer_class(queryset, many=True)
-        return Response(serializer.data)
+    def retrieve_data(self, obj):
+        return {
+            'is_valid': obj.is_valid,
+            'iospec': obj.iospec,
+        }
 
-    @list_route()
-    def concluded(self, request, *args, **kwargs):
-        queryset = self.queryset.filter(concluded=True)
-        serializer = self.serializer_class(queryset, many=True)
-        return Response(serializer.data)
+    def retrieve(self, request, *args, **kwargs):
+        return Response(self.retrieve_data(self.get_object()))
+
+    def update(self, request, pk=None):
+        obj = self.get_object()
+        num_expansions = \
+            request.data.get('num_expansions') or obj.num_expansions
+
+        if not obj.is_valid or obj.num_expansions != num_expansions:
+            obj.expand_inplace()
+
+        return self.retrieve_data(obj)
 
 
+# ------------------------------------------------------------------------------
+# Submissions
+#
+class SubmissionIoViewSet(viewsets.ModelViewSet):
+    """
+    A submission of a program to an IO-based question.
 
+    Performs a CRUD with default REST actions.
+
+    The /api/io/submissions/{id}/feedback/ resource represents an automatically
+    graded feedback to the submission.
+    """
+
+    queryset = IoSubmission.objects.all()
+    serializer_class = IoSubmissionSerializer
+
+
+class SubmissionFeedbackViewSet(viewsets.ModelViewSet):
+    """
+    Information about the feedback of a submission.
+
+    GET - retrieves information of the feedback
+    PUT - forces feedback to be calculated.
+    """
+
+    queryset = IoSubmission.objects.all()
+    serializer_class = IoSubmissionFeedbackSerializer
+
+    def retrieve_data(self, instance):
+        if instance.has_feedback:
+            grade = instance.feedback.grade
+            feedback_data = instance.feedback.feedback_data
+        else:
+            grade = feedback_data = None
+
+        return {
+            'has_feedback': instance.has_feedback,
+            'grade': grade,
+            'feedback_data': feedback_data,
+        }
+
+    def retrieve(self, request, *args, **kwargs):
+        return Response(self.retrieve_data(self.get_object()))
+
+    def update(self, request, pk=None):
+        instance = self.get_object()
+        if not instance.has_feedback:
+            instance.feedback_auto()
+        return self.retrieve_data(instance)
+
+
+# ------------------------------------------------------------------------------
+# Root view: Personalizes APIRootView changing its name to "Io Root"
+#
+class IoView(APIRootView):
+    """
+    Basic resources for IO-based questions.
+
+    /api/io/questions/: fetch and register new questions.
+    /api/io/submissions/: submit response to questions.
+    """
+
+
+# ------------------------------------------------------------------------------
+# View functions
+#
+question_iospec_view = QuestionExpansionViewSet.as_view({
+    'get': 'retrieve',
+    'put': 'update',
+})
+submission_feedback_view = SubmissionFeedbackViewSet.as_view({
+    'get': 'retrieve',
+    'put': 'update',
+})

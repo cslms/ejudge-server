@@ -8,6 +8,8 @@ __pycache__/
 *.egg
 *.egg-info/
 *.sqlite3
+*.rdb
+*.pid
 .cache/
 .coverage
 
