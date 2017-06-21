@@ -27,6 +27,7 @@ ratings:
   - "src/ejudge_server/**.py"
 exclude_paths:
   - "src/ejudge_server/**/migrations/"
+  - "src/ejudge_server/**/tests/*"
   - "__init__.py"
   - "docker/**/*"
   - "docs/**/*"

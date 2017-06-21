@@ -1,9 +1,10 @@
-import jsonfield
 import logging
 import uuid
 from django.core import validators
 from django.db import models
 from django.utils.safestring import mark_safe
+from django.utils.translation import ugettext_lazy as _
+
 from .tasks import expand_question_iospec, autograde_submission
 from .utils import iospec_expand, grade_submission
 
@@ -16,9 +17,13 @@ LANGUAGE_CHOICES = [
 ]
 
 
-class IoQuestion(models.Model):
+class CodeQuestion(models.Model):
     """
     Represents a IO based question in the database.
+
+
+    Grade a question by comparing the student's implementation with a reference
+    implementation and some examples.
     """
 
     title = models.CharField(
@@ -30,44 +35,43 @@ class IoQuestion(models.Model):
     uuid = models.UUIDField(
         default=uuid.uuid4,
         primary_key=True,
-        help_text=mark_safe(
+        help_text=mark_safe(_(
             'Universal Unique Identifier.<br>\n'
             'This identifier must be the same both in the main Codeschool site '
             'and in the Ejudge microservice.'
-        )
-    )
-    source = models.TextField(
-        help_text=(
-            'Source code for the reference solution used to expand the '
-            'iospec template.'
-        )
-    )
-    language = models.CharField(
-        max_length=50,
-        choices=LANGUAGE_CHOICES,
-        help_text=(
-            'Programming language used in the reference program.'
-        )
-    )
-    iospec = models.TextField(
-        blank=True,
-        editable=False,
-        help_text=(
-            'Expanded iospec data. Use the ./iospec-expansion/ endpoint in '
-            'order to force/control expansion'
-        )
+        ))
     )
 
-    iospec_template = models.TextField(
-        help_text=(
-            'Correction template written in the iospec format.'
-        )
+    grader = models.TextField(
+        _('Grader source code'),
+        help_text=_(
+            'The grader is a Python script that defines a '
+            '"grade(test, reference)" function that takes the test function '
+            'and a reference implementation and raise AssertionErrors if '
+            'something fail.'
+        ),
     )
-    num_expansions = models.IntegerField(
-        default=25,
-        help_text=(
-            'Default number of expansions computed from the iospec template.'
-        )
+    reference = models.TextField(
+        _('Reference implementation'),
+        help_text=_(
+            'Reference implementation for the correct function.'
+        ),
+    )
+    function_name = models.CharField(
+        _('Function name'),
+        max_length=80,
+        default='func',
+        help_text=_(
+            'The name of the test object. (This is normally a function, but '
+            'we can also test classes, data structures, or anything)',
+        ),
+    )
+    timeout = models.FloatField(
+        _('Timeout'),
+        default=1.0,
+        help_text=_(
+            'Maximum interval (in seconds) used to grade the question.'
+        ),
     )
     is_valid = models.BooleanField(default=bool)
 
@@ -117,19 +121,12 @@ class IoSubmission(models.Model):
         primary_key=True
     )
     question = models.ForeignKey(
-        IoQuestion,
+        CodeQuestion,
         related_name='submissions',
     )
     source = models.TextField(
         help_text=(
             'Source code for submission.'
-        )
-    )
-    language = models.CharField(
-        max_length=50,
-        choices=LANGUAGE_CHOICES,
-        help_text=(
-            'Programming language used in the submitted program.'
         )
     )
     has_feedback = models.BooleanField(
@@ -192,4 +189,34 @@ class IoFeedback(models.Model):
             validators.MinValueValidator(0),
             validators.MaxValueValidator(100),
         ])
-    feedback_data = jsonfield.JSONField()
+    error_message = models.TextField(blank=True)
+
+    def get_autograde_value(self):
+        question = self.question
+        submission = self.submission
+
+        source = submission.source
+        error = find_code_errors(question, source)
+        return 100 if error is None else 0, {'error_message': error or ''}
+
+
+def find_code_errors(question, code, use_sandbox=True):
+    """
+    Return an error message for any defects encountered on the given string
+    of python code.
+    """
+
+    args = (question.grader, code, question.reference, question.function_name)
+    runner = lambda f, args, **kwargs: f(*args)
+
+    if use_sandbox:
+        import boxed
+
+        runner = boxed.run
+
+    return \
+        runner(code_errors,
+               args=args,
+               serializer='json',
+               timeout=question.timeout,
+               imports=['ejudge_server.question_code.grader'])
