@@ -1,3 +1,37 @@
+"""
+A question based on unittests.
+
+Consider a simple question that asks the user to define a function that sum
+2 numbers. It is necessary to define two fields:
+
+grader.py::
+
+    def grader(user, correct):
+        assert user(1, 2) == correct(1, 2)
+
+        for i in range(10):
+            for j in range(10):
+                assert user(i, j) == correct(i, j)
+
+
+reference.py::
+
+    # This is the correct answer!
+
+    def add(x, y):
+        return x + y
+
+
+We specify that the grader should look for an "add field" by setting the
+"function_name" variable. It will look for this element in a user-provided code
+such as in the example::
+
+    def add(x, y):
+        return x + y   # Student made an error!
+
+
+"""
+
 import logging
 import uuid
 from django.core import validators
@@ -5,7 +39,7 @@ from django.db import models
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext_lazy as _
 
-from .grader import get_code_errors
+from .grader import get_code_errors as get_code_errors_unsafe
 from .tasks import autograde_submission
 
 logger = logging.getLogger('question_io')
@@ -149,7 +183,7 @@ class CodeSubmission(models.Model):
 
 class CodeFeedback(models.Model):
     """
-    IoFeedback for submission.
+    CodeFeedback for submission.
     """
 
     submission = models.OneToOneField(
@@ -170,17 +204,37 @@ class CodeFeedback(models.Model):
         submission = self.submission
 
         source = submission.source
-        error = find_code_errors(question, source)
+        error = get_code_errors(question, source)
         return 100 if error is None else 0, {'error_message': error or ''}
 
 
-def find_code_errors(question, code, use_sandbox=True):
+def get_code_errors(grader, code, reference, name, use_sandbox=True,
+                    timeout=5.0):
     """
     Return an error message for any defects encountered on the given string
     of python code.
+
+    This code can run in a sandbox.
+
+    Args:
+        grader (str):
+            A string with the grade source code.
+        code (str):
+            A string of code with the student response.
+        reference (str):
+            Code of a correct response.
+        name:
+            Name of the variable that should be inspected by the grader.
+        use_sandbox:
+            If True, execute code in a sandbox.
+        timeout (float):
+            Execution timeout (only works in sandboxed mode).
+
+    Returns:
+        A string describing an error or None if the codes executed successfully.
     """
 
-    args = (question.grader, code, question.reference, question.function_name)
+    args = (grader, code, reference, name)
     runner = lambda f, args, **kwargs: f(*args)
 
     if use_sandbox:
@@ -189,8 +243,8 @@ def find_code_errors(question, code, use_sandbox=True):
         runner = boxed.run
 
     return \
-        runner(code_errors,
+        runner(get_code_errors_unsafe,
                args=args,
                serializer='json',
-               timeout=question.timeout,
+               timeout=timeout,
                imports=['ejudge_server.question_code.grader'])
