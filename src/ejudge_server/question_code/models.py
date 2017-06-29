@@ -5,8 +5,8 @@ from django.db import models
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext_lazy as _
 
-from .tasks import expand_question_iospec, autograde_submission
-from .utils import iospec_expand, grade_submission
+from .grader import get_code_errors
+from .tasks import autograde_submission
 
 logger = logging.getLogger('question_io')
 
@@ -54,7 +54,8 @@ class CodeQuestion(models.Model):
     reference = models.TextField(
         _('Reference implementation'),
         help_text=_(
-            'Reference implementation for the correct function.'
+            'Reference implementation for the correct function. This is an '
+            'example of a correct implementation of the current question.'
         ),
     )
     function_name = models.CharField(
@@ -79,35 +80,10 @@ class CodeQuestion(models.Model):
         return '%s (%s)' % (self.title, self.uuid)
 
     def __repr__(self):
-        return '<IoQuestion %r (%s)>' % (self.title, self.uuid)
-
-    _iospec_expand = staticmethod(iospec_expand)
-
-    def save(self, schedule=True, **kwargs):
-        super().save(**kwargs)
-        if schedule and not self.iospec:
-            expand_question_iospec.delay(self.pk)
-
-    def expand_inplace(self, commit=True):
-        """
-        Expands iospec template inplace saving results on the database.
-        """
-
-        logger.info('expanding question: %s' % self)
-        from pprint import pprint
-        pprint(self.__dict__)
-        self.iospec = self._iospec_expand(
-            self.iospec_template,
-            self.source,
-            self.language
-        )
-        self.is_valid = True
-        pprint(self.__dict__)
-        if commit:
-            super().save()
+        return '<CodeQuestion %r (%s)>' % (self.title, self.uuid)
 
 
-class IoSubmission(models.Model):
+class CodeSubmission(models.Model):
     """
     An anonymous submission.
 
@@ -142,9 +118,6 @@ class IoSubmission(models.Model):
             self.uuid, self.question.title, self.language
         )
 
-    # It is here to helo mocking
-    _grade_submission = staticmethod(grade_submission)
-
     def save(self, schedule=True, **kwargs):
         super().save(**kwargs)
         if schedule and not self.has_feedback:
@@ -152,9 +125,10 @@ class IoSubmission(models.Model):
 
     def feedback_auto(self, commit=True):
         """
-        Grade submission and return a IoFeedback instance.
+        Grade submission and return a CodeFeedback instance.
         """
 
+        get_code_errors(...)
         logger.info('grading submission: %s (%s)' % (self, self.question))
 
         grade, feedback_data = self._grade_submission(
@@ -162,7 +136,7 @@ class IoSubmission(models.Model):
             self.source,
             self.language
         )
-        feedback = IoFeedback(
+        feedback = CodeFeedback(
             grade=grade, submission=self, feedback_data=feedback_data
         )
         self.has_feedback = True
@@ -173,13 +147,13 @@ class IoSubmission(models.Model):
         return feedback
 
 
-class IoFeedback(models.Model):
+class CodeFeedback(models.Model):
     """
     IoFeedback for submission.
     """
 
     submission = models.OneToOneField(
-        IoSubmission,
+        CodeSubmission,
         related_name='feedback',
         primary_key=True,
     )

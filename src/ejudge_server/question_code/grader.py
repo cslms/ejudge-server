@@ -18,7 +18,7 @@ class FetchObjectError(Exception):
     """
 
 
-def code_errors(grader, test_code, reference_code, name='func'):
+def get_code_errors(grader, test_code, reference_code, name='func'):
     """
     Return a string describing any code error found on the given code.
 
@@ -50,8 +50,6 @@ def code_errors(grader, test_code, reference_code, name='func'):
     except FetchObjectError as ex:
         raised = ex.args[0]
         return 'RuntimeError (%s): %s' % (raised.__class__.__name__, raised)
-
-    print(test, reference, grader)
 
     try:
         grader(test, reference)
